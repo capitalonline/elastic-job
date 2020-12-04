@@ -18,7 +18,7 @@
 ## Linux 
 **linux to windows**
 ```    
-       SET CGO_ENABLED=0  //不设置也可以，原因不明
+       SET CGO_ENABLED=0  
        SET GOOS=windows
        SET GOARCH=amd64
        cd cmd && go build -o mongodb-job
@@ -27,7 +27,7 @@
 ## Windows
 **windows to linux**
 ```    
-       SET CGO_ENABLED=0  //不设置也可以，原因不明
+       SET CGO_ENABLED=0  
        SET GOOS=linux
        SET GOARCH=amd64
        cd cmd && go build -o mongodb-job
@@ -38,29 +38,4 @@
 ```    
        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o mongodb-job
 ```
-
-## 部署信息
-```
-kk8s环境详情
-kk8s预生产环境：
-1、集群内部调用地址： master: mongodb-job-service 、worker1: mongodb-job-worker1 、 worker2：mongodb-job-worker2
-   集群外部调试地址：  
-   
-2、 日志查看地址：   
-
-```
-
-
-
-
-```
-
-k8s预生产环境：
-1、集群内部调用地址：  
-   集群外部调试地址： 
-   
-2、 日志查看地址：   
-
-```
-
    

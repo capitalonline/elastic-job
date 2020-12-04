@@ -1,0 +1,4 @@
+{% for shard in shard_server -%}
+sh.addShard("{{shard}}");
+{% endfor -%}
+

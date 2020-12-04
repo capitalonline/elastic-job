@@ -1,0 +1,18 @@
+db = db.getSiblingDB("admin");
+db.createRole(
+    {
+        role:"superUser",
+        privileges:[{
+            resource: {anyResource: true},
+            actions: ["anyAction"]
+        }],
+        roles:[]
+    }
+);
+db.createUser(
+    {
+        user: "{{super_user_info.username}}",
+        pwd: "{{super_user_info.passwd}}",
+        roles: [{role: "superUser", db: "admin"}]
+    }
+);

@@ -1,0 +1,2 @@
+db = db.getSiblingDB("admin")
+db.runCommand({createBackup: 1, backupDir: "{{backup_path}}"})

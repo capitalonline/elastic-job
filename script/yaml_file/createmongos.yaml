@@ -1,0 +1,105 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  vars:
+    mongo_slow_log_workspace: "/opt/mongo_slow_log"
+  tasks:
+    - block:
+        - name: add gateway
+          shell: route add default gw {{nat_gateway}}
+          ignore_errors: True
+
+        - name: add getway to start
+          shell: echo 'route add default gw {{nat_gateway}}' > /etc/rc.local
+
+    - block:
+        - name: copy disable transparent hugepages
+          template: src=../templates/disable-transparent-hugepages.j2 dest=/etc/init.d/disable-transparent-hugepages
+
+        - name: chmod script
+          shell: chmod 755 /etc/init.d/disable-transparent-hugepages
+
+        - name: update rc.d
+          shell: update-rc.d disable-transparent-hugepages defaults
+
+        - name: init.d start
+          shell: /etc/init.d/disable-transparent-hugepages start
+    - block:
+        - name: crate mongos group
+          group: name=mongos state=present
+          ignore_errors: True
+
+        - name: create mongos user
+          shell: useradd -r -g mongos mongos
+          ignore_errors: True
+
+        - name: make data dir and log dir
+          file: path=/data/{{item}} state=directory owner=mongos group=mongos
+          with_items:
+            - "mongodb"
+            - "mongodb-log"
+
+        - name: unarchive mongo
+          unarchive:
+            copy: no
+            src: /opt/mongodb-3.4.21.tgz
+            dest: /usr/bin
+          when: mongo_version == "3.4.21"
+
+        - name: unarchive mongo
+          unarchive:
+            copy: no
+            src: /opt/mongodb-4.0.16.tgz
+            dest: /usr/bin
+          when: mongo_version == "4.0.16"
+
+    - block:
+        - name: copy keyfile
+          copy: src={{keyfile_path}} dest=/opt/auth.key
+
+        - name: chown keyfile
+          shell: chown -R mongos.mongos /opt/auth.key
+
+        - name: chmod keyfile
+          shell: chmod 400 /opt/auth.key
+
+        - name: copy mongo service file
+          copy: src=../templates/mongos.service dest=/lib/systemd/system/mongos.service
+
+        - name: daemon reload
+          shell: systemctl daemon-reload
+
+        - name: copy mongod config file
+          template: src=../templates/mongos.j2 dest=/etc/mongos.conf
+
+    - block:
+#        - name: reload service file
+#          shell: systemctl daemon-reload
+        - name: start mongos service
+          service: name=mongos state=started
+    - block:
+        - name: wait for mongo start
+          wait_for: port={{ port }} delay=10 timeout=60
+
+    - block:
+        - name: copy init mongos set js, create user js
+          template: src=../templates/{{item.template}} dest={{item.path}}
+          with_items:
+            - {"template": "init_mongos_set.j2", "path": "/tmp/init_mongos_set.js"}
+#            - {"template": "create_user.j2", "path": "/tmp/create_user.js"}
+
+        - name: init replica set
+          shell: /usr/bin/mongo -u{{super_user_info.username}} -p{{super_user_info.passwd}} /tmp/init_mongos_set.js
+
+#        - name: create super user
+#          shell: /usr/bin/mongo /tmp/create_user.js
+      when: private_ip == primary
+
+    - block:
+        - name: copy mongo exporter
+          template: src=../templates/mongo_exporter.j2 dest=/lib/systemd/system/mongoexporter.service
+        - name: daemon reload
+          shell: systemctl daemon-reload
+        - name: start mongo exporter
+          shell: systemctl start mongoexporter.service

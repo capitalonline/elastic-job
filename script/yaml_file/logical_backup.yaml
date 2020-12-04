@@ -1,0 +1,48 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  vars:
+    backup_file: "{{backup_path}}/{{tar_filename}}.tar.gz"
+    db_info_file: "{{db_info_path}}/{{tar_filename}}.json"
+    snapshot_path: "{{backup_path}}/snapshot/"
+    oplog_path: "{{backup_path}}/oplog/"
+  tasks:
+    - block:
+        - name: copy template
+          template: src=../templates/parse_backup_file.j2 dest=/etc/parse_backup_file.py
+
+        - name: mkdir db_info & snapshot & oplog dir
+          file: name={{item}} state=directory
+          with_items:
+            - "{{snapshot_path}}"
+            - "{{oplog_path}}"
+            - "{{db_info_path}}"
+
+        - name: dump all database include oplog
+          shell: mongodump -u{{super_user_info.username}} -p{{super_user_info.passwd}} --authenticationDatabase admin --oplog -o {{snapshot_path}}
+
+        - name: dump oplog.rs
+          shell: mongodump -u{{super_user_info.username}} -p{{super_user_info.passwd}} --authenticationDatabase admin -d local -c oplog.rs -o {{oplog_path}}
+
+        - name: parse backup file
+          shell: python /etc/parse_backup_file.py > {{db_info_file}}
+
+        - name: Fetches a file from remote nodes
+          fetch: src={{item}} dest={{item}} flat=yes
+          with_items:
+            - "{{db_info_file}}"
+
+        - name: rm tmp file
+          shell: rm {{db_info_file}}
+
+        - name: compress backup data file
+          archive: path={{backup_path}}/* dest={{backup_file}} format=gz remove=yes
+
+        - name: query file name
+          script: "../templates/check_file.py {{backup_path}}"
+          register: return_query
+        - debug:
+            msg: "path={{return_query.stdout_lines[0]}},size={{return_query.stdout_lines[1]}},backup_host_ip={{backup_host_ip}},json_filename={{db_info_file}},replica_set_name={{replica_set_name}}"
+
+

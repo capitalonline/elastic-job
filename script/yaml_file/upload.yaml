@@ -1,0 +1,41 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  tasks:
+        - name: sed hosts
+          lineinfile:
+            path: /etc/hosts
+            state: present
+            regexp: '^{{host_ip}}'
+            insertafter: '^127'
+            line: '{{host_ip}}'
+
+        - name: sed total hosts
+          lineinfile:
+            path: /etc/hosts
+            state: present
+            regexp: '^{{total_host_ip}}'
+            insertafter: '^127'
+            line: '{{total_host_ip}}'
+
+
+        - name: Generating configuration scripts
+          template: src=../templates/upload_down_file.j2 dest=/etc/upload_down.py
+
+        - name: imp script
+          shell: python /etc/upload_down.py
+          async: 72000
+          poll: 120
+          register: upload
+        - debug:
+            var: "{{upload.stdout}}"
+
+        - name: return message
+          vars:
+            upload_info: "{{upload.stdout | from_json}}"
+          debug:
+            msg="md5={{upload_info.md5}},replica_set_name={{replica_set_name}},remote_path={{remote_backup_file}}"
+
+        - name: empty backup dectory
+          shell: rm -rf {{backup_file}}

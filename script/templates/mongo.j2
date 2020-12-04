@@ -1,0 +1,20 @@
+storage:
+  dbPath: /data/mongodb
+  journal:
+    enabled: true
+
+systemLog:
+  destination: file
+  logAppend: true
+  path: /data/mongodb-log/mongod.log
+
+net:
+  port: {{port}}
+  bindIp: 0.0.0.0
+
+replication:
+  oplogSizeMB: {{oplog_size}}
+  replSetName: "{{repl_set_name}}"
+
+security:
+  authorization: "disabled"

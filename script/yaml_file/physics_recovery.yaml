@@ -1,0 +1,86 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  tasks:
+
+    - block:
+        - name: sed hosts
+          lineinfile:
+            path: /etc/hosts
+            state: present
+            regexp: '^{{host_ip}}'
+            insertafter: '^127'
+            line: '{{host_ip}}'
+
+        - name: sed total hosts
+          lineinfile:
+            path: /etc/hosts
+            state: present
+            regexp: '^{{total_host_ip}}'
+            insertafter: '^127'
+            line: '{{total_host_ip}}'
+
+    - block:
+        - name: copy template
+          template: src=../templates/upload_down_file.j2 dest=/etc/upload_down.py
+
+        - name: imp script
+          shell: python /etc/upload_down.py
+          register: download
+        - debug: var='{{download}}'
+
+    - block:
+        - name: stop hidden and secondary node
+          service: name=mongod state=stopped
+          when: private_ip != primary
+
+        - name: stop primary node
+          service: name=mongod state=stopped
+          when: private_ip == primary
+
+        - name: empty mongo data directory
+          file: path=/data/mongodb/ owner=mongod group=mongod state={{item}}
+          with_items:
+            - absent
+            - directory
+
+    - block:
+        - name: recovery data
+          shell: tar -C /data/mongodb -zxf {{backup_file}}
+
+        - name: delete backup file
+          shell: rm {{backup_file}}
+
+        - name: chmod journal owner
+          shell: chown -R mongod.mongod /data/mongodb/journal
+
+        - name: start primary
+          service: name=mongod state=started
+
+        - name: check mongod status
+          wait_for: port={{port}}  host="{{private_ip}}" delay=5 timeout=30
+
+        - name: empty local.system.replset
+          shell: mongo -u{{super_user_info.username}} -p{{super_user_info.passwd}} --authenticationDatabase admin < /tmp/clear_replica_set.js
+
+        - name: start primary
+          service: name=mongod state=restarted
+
+        - name: check mongod status
+          wait_for: port={{port}}  host="{{private_ip}}" delay=5 timeout=30
+
+      when: private_ip == primary
+
+    - block:
+        - name: start all hidden and old secondary node
+          service: name=mongod state=started
+          when: private_ip != primary
+
+        - name: check mongod status
+          wait_for: port={{port}}  host="{{private_ip}}" delay=5 timeout=30
+          when: private_ip != primary
+
+        - name: init replica set
+          shell: mongo -u{{super_user_info.username}} -p{{super_user_info.passwd}} --authenticationDatabase admin < /tmp/init_replica_set.js
+          when: private_ip == primary

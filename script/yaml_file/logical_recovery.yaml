@@ -1,0 +1,85 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  vars:
+    snapshot_path: "{{recovery_dir}}/snapshot/"
+    oplog_path: "{{recovery_dir}}/oplog/"
+  tasks:
+    - block:
+        - name: sed hosts
+          lineinfile:
+            path: /etc/hosts
+            state: present
+            regexp: '^{{host_ip}}'
+            insertafter: '^127'
+            line: '{{host_ip}}'
+
+        - name: sed total hosts
+          lineinfile:
+            path: /etc/hosts
+            state: present
+            regexp: '^{{total_host_ip}}'
+            insertafter: '^127'
+            line: '{{total_host_ip}}'
+
+    - block:
+#        - name: download boto3
+#          get_url:
+#            url: http://100.63.0.100/pakg/{{item}}
+#            url_username: admin
+#            url_password: Admin2210
+#            dest: /tmp
+#            mode: 755
+#          with_items:
+#            - boto3.tar.gz
+#
+#        - name: tar boto3
+#          shell: tar -zxf /tmp/boto3.tar.gz -C /tmp
+#
+#        - name: install boto3
+#          shell: pip install --no-index --find-links='/tmp/pack' boto3==1.7.61
+
+        - name: copy template
+          template: src=../templates/upload_down_file.j2 dest=/etc/upload_down.py
+
+        - name:  download backup file
+          shell: python /etc/upload_down.py
+          register: download
+        - debug: var='{{download}}'
+
+        - name: mkdir snapshot & oplog dir
+          file: name={{item}} state=directory
+          with_items:
+            - "{{snapshot_path}}"
+            - "{{oplog_path}}"
+
+        - name: make recovery dir
+          file: name={{recovery_dir}} state=directory
+
+        - name: unarchive download file
+          shell: tar -C {{recovery_dir}} -zxf {{backup_file}}
+
+        - name: recovery with all
+          shell: mongorestore  -u{{super_user_info.username}} -p{{super_user_info.passwd}}  --authenticationDatabase admin --drop {{snapshot_path}}
+          when: recovery_type == "snapshot"
+
+        - name: recovery with oplog
+          shell: mongorestore  -u{{super_user_info.username}} -p{{super_user_info.passwd}}  --authenticationDatabase admin --oplogReplay --oplogLimit {{oplog_limit}}  /{{oplog_path}}/local/oplog.rs.bson
+          when: recovery_type == "oplog"
+
+    - block:
+        - name: recovery with database and collection
+          shell: mongorestore -u{{super_user_info.username}} -p{{super_user_info.passwd}}  --authenticationDatabase admin  --nsInclude {{item.0.old_db_name}}.{{item.1.old_table_name}} --nsTo {{item.0.new_db_name}}.{{item.1.new_table_name}} --nsFrom {{item.0.old_db_name}}.{{item.1.old_table_name}} --drop --dir {{snapshot_path}}
+          with_subelements:
+            - "{{database}}"
+            - collection
+      when: recovery_type == "database"
+
+    - block:
+        - name: empty recovery dir
+          file: name={{recovery_dir}} state=absent
+
+        - name: remove download file
+          file: name={{backup_file}} state=absent
+

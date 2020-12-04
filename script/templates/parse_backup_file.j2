@@ -1,0 +1,22 @@
+import os
+import json
+
+base_path = os.path.abspath("{{snapshot_path}}")
+data_info = {"DBs": []}
+db_collection = dict()
+
+for dir_name, sub_dir_name, file_list in os.walk(base_path):
+        if dir_name == base_path:
+                continue
+        else:
+                database = dir_name.split('/')[-1]
+                if database in {'admin', 'local'}:
+                        continue
+                db_collection = {"DBName": database, "Collections": []}
+                for file in file_list:
+                        suffix = '.bson'
+                        if file.endswith(suffix):
+                                collection = file[:-len(suffix)]
+                                db_collection["Collections"].append(collection)
+        data_info["DBs"].append(db_collection)
+print json.dumps(data_info)

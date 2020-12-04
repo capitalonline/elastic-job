@@ -1,0 +1,13 @@
+systemLog:
+  destination: file
+  logAppend: true
+  path: /data/mongodb-log/mongod.log
+
+net:
+  port: {{port}}
+  bindIp: 0.0.0.0
+
+sharding:
+  configDB: {{config_server}}
+security:
+  keyFile: '/opt/auth.key'

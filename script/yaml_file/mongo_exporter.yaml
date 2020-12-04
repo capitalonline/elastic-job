@@ -1,0 +1,16 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  tasks:
+    - block:
+        - name: copy mongo exporter
+          template: src=../templates/mongo_exporter.j2 dest=/lib/systemd/system/mongoexporter.service
+        - name: daemon reload
+          shell: systemctl daemon-reload
+        - name: start mongo exporter
+          shell: systemctl start mongoexporter.service
+
+    - block:
+        - name: restart mongo exporter
+          shell: systemctl restart mongoexporter.service

@@ -1,0 +1,221 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  vars:
+    mongo_slow_log_workspace: "/opt/mongo_slow_log"
+  tasks:
+    - block:
+        - name: add gateway
+          shell: route add default gw {{gateway}}
+          ignore_errors: True
+
+        - name: add getway to start
+          shell: echo 'route add default gw {{gateway}}' > /etc/rc.local
+
+
+    - block:
+        - name: copy disable transparent hugepages
+          template: src=../templates/disable-transparent-hugepages.j2 dest=/etc/init.d/disable-transparent-hugepages
+
+        - name: chmod script
+          shell: chmod 755 /etc/init.d/disable-transparent-hugepages
+
+        - name: update rc.d
+          shell: update-rc.d disable-transparent-hugepages defaults
+
+        - name: init.d start
+          shell: /etc/init.d/disable-transparent-hugepages start
+    - block:
+        - name: crate mongodb group
+          group: name=mongod state=present
+          ignore_errors: True
+
+        - name: create mongodb user
+          shell: useradd -r -g mongod mongod
+          ignore_errors: True
+
+        - name: make data dir and log dir
+          file: path=/data/{{item}} state=directory owner=mongod group=mongod
+          with_items:
+            - "mongodb"
+            - "mongodb-log"
+
+        - name: unarchive mongo
+          unarchive:
+            copy: no
+            src: /opt/mongodb-3.4.21.tgz
+            dest: /usr/bin
+          when: mongo_version == "3.4.21"
+
+        - name: unarchive mongo
+          unarchive:
+            copy: no
+            src: /opt/mongodb-4.0.16.tgz
+            dest: /usr/bin
+          when: mongo_version == "4.0.16"
+      when: private_ip != hidden
+
+    - block:
+        #  FOR UBUNTU
+        - name: kill dpkg process
+          shell: kill -9 `lsof /var/lib/dpkg/lock |awk '{print $2}'|grep -0 "[0-9]"`
+          ignore_errors: True
+
+        - name: delete lock file
+          shell: rm /var/lib/dpkg/lock && dpkg --configure -a && rm /var/cache/apt/archives/lock
+          ignore_errors: True
+
+        - name: install mongodb
+          shell: cd /opt && dpkg -i *.deb
+          retries: 3
+          delay: 5
+          register: mongo_result
+          until: mongo_result.rc == 0
+
+        - name: make data dir and log dir
+          file: path=/data/{{item}} state=directory owner=mongod group=mongod
+          with_items:
+            - "mongodb"
+            - "mongodb-log"
+      #        - name: install percona mongodb
+      #          yum: name={{item}} state=present
+      #          with_items:
+      #            - "/opt/percona-server-mongodb-server-4.0.16-9.el7.x86_64.rpm"
+      #            - "/opt/percona-server-mongodb-shell-4.0.16-9.el7.x86_64.rpm"
+      #            - "/opt/percona-server-mongodb-tools-4.0.16-9.el7.x86_64.rpm"
+      #          retries: 3
+      #          delay: 5
+      #          register: mongo_result
+      #          until: mongo_result.rc == 0
+      #
+      #        - name: make data dir and log dir
+      #          file: path=/data/{{item}} state=directory owner=mongod group=mongod
+      #          with_items:
+      #            - "mongodb"
+      #            - "mongodb-log"
+      when: private_ip == hidden
+
+    - block:
+        - name: copy keyfile
+          copy: src={{keyfile_path}} dest=/opt/auth.key
+
+        - name: chown keyfile
+          shell: chown -R mongod.mongod /opt/auth.key
+
+        - name: chmod keyfile
+          shell: chmod 400 /opt/auth.key
+
+        - name: copy mongo service file
+          copy: src=../templates/mongod.service dest=/lib/systemd/system/mongod.service
+
+        - name: daemon reload
+          shell: systemctl daemon-reload
+
+        - name: copy mongod config file
+          template: src=../templates/mongo.j2 dest=/etc/mongod.conf
+
+        - name: edit shard, config mongod.conf
+          lineinfile:
+            dest: "/etc/mongod.conf"
+            insertafter: 'bindIp:'
+            line: "sharding:"
+          when: svc_type == "Sharding"
+
+        - name: edit shard, config mongod.conf
+          lineinfile:
+            dest: "/etc/mongod.conf"
+            insertafter: 'sharding:'
+            line: "    clusterRole: configsvr"
+          when: svc_type == "Sharding" and server_role == "config"
+
+        - name: edit shard, config mongod.conf
+          lineinfile:
+            dest: "/etc/mongod.conf"
+            insertafter: 'sharding:'
+            line: "    clusterRole: shardsvr"
+          when: svc_type == "Sharding" and server_role == "shard"
+
+    - block:
+        - name: start mongod service
+          service: name=mongod state=started
+      when: private_ip != hidden
+
+    - block:
+        - name: reload service file
+          shell: systemctl daemon-reload
+
+        - name: start percona mongodb
+          service: name=mongod state=restarted
+      when: private_ip == hidden
+
+    - block:
+        - name: wait for mongo start
+          wait_for: port={{ port }} delay=30 timeout=60
+
+    - block:
+        - name: copy init replica set js, create user and clear replica set file
+          template: src=../templates/{{item.template}} dest={{item.path}}
+          with_items:
+            - {"template": "init_replica_set.j2", "path": "/tmp/init_replica_set.js"}
+            - {"template": "create_user.j2", "path": "/tmp/create_user.js"}
+          when: server_role == "shard"
+
+        - name: init replica set
+          shell: /usr/bin/mongo /tmp/init_replica_set.js
+          when: server_role == "shard"
+
+        - name: copy init config set js, create user and clear config set file
+          template: src=../templates/{{item.template}} dest={{item.path}}
+          with_items:
+            - {"template": "init_config_set.j2", "path": "/tmp/init_config_set.js"}
+            - {"template": "create_user.j2", "path": "/tmp/create_user.js"}
+          when: server_role == "config"
+
+        - name: init config set
+          shell: /usr/bin/mongo /tmp/init_config_set.js
+          when: server_role == "config"
+
+        - name: create super user
+          shell: mongo "mongodb://localhost/?replicaSet={{repl_set_name}}" /tmp/create_user.js
+      when: private_ip == primary
+
+    - block:
+        - name:  edit mongod.conf
+          replace:
+            path: /etc/mongod.conf
+            regexp: '\s+authorization:\s+"disabled"'
+            replace: '\n    authorization: "enabled"'
+
+        - name:  edit mongod.conf
+          lineinfile:
+            dest: "/etc/mongod.conf"
+            insertafter: 'authorization:'
+            line: "    keyFile: '/opt/auth.key'"
+
+
+    - block:
+        - name: copy shutdown js file
+          template: src=../templates/{{item.template}} dest={{item.path}}
+          with_items:
+            - {"template": "clear_replica_set.j2", "path": "/tmp/clear_replica_set.js"}
+
+        - name: restart secondary mongo
+          service: name=mongod state=stopped
+          when: private_ip != primary
+
+        - name: restart secondary mongo
+          service: name=mongod state=restarted
+          when: private_ip == primary
+
+        - name: restart secondary mongo
+          service: name=mongod state=started
+          when: private_ip != primary
+
+    - block:
+        - name: copy mongo exporter
+          template: src=../templates/mongo_exporter.j2 dest=/lib/systemd/system/mongoexporter.service
+        - name: daemon reload
+          shell: systemctl daemon-reload
+        - name: start mongo exporter
+          shell: systemctl start mongoexporter.service

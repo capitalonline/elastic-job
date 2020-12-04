@@ -1,0 +1,17 @@
+storage:
+  dbPath: /data/mongodb
+  journal:
+    enabled: true
+
+systemLog:
+  destination: file
+  logAppend: true
+  path: /data/mongodb-log/mongod.log
+
+net:
+  port: {{port}}
+  bindIp: 0.0.0.0
+
+security:
+  authorization: "enabled"
+  keyFile: '/opt/auth.key'

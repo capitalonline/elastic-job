@@ -1,0 +1,10 @@
+use local
+db.dropDatabase()
+use config
+{% for it in shard_uri -%}
+db.shards.updateOne(
+  { "_id" : "{{it.replica_set_name}}" },
+  { $set : { "host" : "{{it.uri}}" } }
+)
+{% endfor -%}
+

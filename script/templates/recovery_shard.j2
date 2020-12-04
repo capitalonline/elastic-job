@@ -1,0 +1,10 @@
+use local
+db.dropDatabase()
+use admin
+db.system.version.deleteOne( { _id: "minOpTimeRecovery" } )
+db.system.version.updateOne(
+  { "_id" : "shardIdentity" },
+  { $set :
+    { "configsvrConnectionString" : "{{configserver_uri}}"}
+  }
+)

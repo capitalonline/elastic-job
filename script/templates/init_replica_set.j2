@@ -1,0 +1,9 @@
+config = { _id:"{{repl_set_name}}", members:[
+{_id:0,host:"{{primary}}:{{port}}",priority:2},
+{% for secondary in secondaries -%}
+{_id:{{loop.index}},host:"{{secondary}}:{{port}}",priority:1},
+{% endfor -%}
+{_id:{{secondaries|length + 1}},host:"{{hidden}}:{{port}}",priority:0,hidden:1}]
+}
+rs.initiate(config);
+

@@ -1,0 +1,25 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  tasks:
+    - block:
+        - name: stop mongos node
+          service: name=mongos state=stopped
+          when: server_type=="mongos"
+
+        - name: stop config hidden and secondary node
+          service: name=mongod state=stopped
+          when: vm_role!= "primary"  and "config" == server_type
+
+        - name: stop config primary node
+          service: name=mongod state=stopped
+          when: vm_role=="primary" and "config" == server_type
+
+        - name: stop shard hidden and secondary node
+          service: name=mongod state=stopped
+          when: vm_role!="primary" and "shard" ==server_type
+
+        - name: stop shard primary node
+          service: name=mongod state=stopped
+          when:  vm_role=="primary" and "shard" ==server_type

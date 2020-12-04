@@ -1,0 +1,300 @@
+# coding=utf-8
+
+import logging
+import os
+import sys
+import json
+from boto3 import Session
+from botocore.exceptions import ClientError
+import hashlib
+import urllib
+
+default_encoding = 'utf-8'
+if sys.getdefaultencoding() != default_encoding:
+    reload(sys)
+    sys.setdefaultencoding(default_encoding)
+
+
+def mkdir(dirname):
+    try:
+        os.makedirs(dirname)
+        return dirname
+    except OSError, e:
+        msg = unicode(e)
+        if msg.startswith('[Errno 17] File exists: '):
+            return dirname # for linux: ignore if already exist
+        elif msg.startswith('[Error 183] : '):
+            return dirname # for windows: ignore if already exist
+        else:
+            raise
+
+def mkpdir(path):
+    parent_dir = os.path.dirname(path)
+    mkdir(parent_dir)
+
+
+class myURLOpener(urllib.FancyURLopener):
+    def http_error_206(self, url, fp, errcode, errmsg, headers, data=None):
+        pass
+
+
+class S3Api(object):
+    def __init__(self, access_key, secret_key, bucket_name, endpoint_url, region_name='US'):
+        self.access_key = access_key
+        self.secret_key = secret_key
+        self.bucket_name = bucket_name
+        self.endpoint_url = endpoint_url
+        self.session = Session(self.access_key, self.secret_key)
+        self.s3_client = self.session.client('s3', endpoint_url=endpoint_url)
+        self.resource = self.session.resource('s3', endpoint_url=endpoint_url)
+
+    def download_file_link(self, remote_path):
+        try:
+            self.s3_client.head_object(Bucket=self.bucket_name, Key=remote_path)
+            private_url = self.s3_client.generate_presigned_url(
+                ClientMethod='get_object',
+                Params={'Bucket': self.bucket_name, 'Key': remote_path},
+                ExpiresIn=3600, HttpMethod='GET')
+        except Exception as e:
+            logging.exception(e)
+            return False, None
+        return True, private_url
+
+    def down_file(self, local_path, remote_path):
+        """
+         小文件 从存储下载 下载文件
+        :param bucket_name: 桶的名字
+        :param local_path: 用户存储的本地文件
+        :param remote_path: 远程存储里面的文件路径
+        :return:
+        """
+
+
+        mkpdir(local_path) #判断文件存储路径存在与否，
+
+        result_dict = {}
+        resp = self.s3_client.get_object(Bucket=self.bucket_name, Key=remote_path)
+        with open(local_path, 'a') as f:
+            f.write(resp['Body'].read())
+
+    def big_file_down(self, local_path, remote_path, md5):
+        """ 大文件采用断点续传 """
+        is_down = True
+        result_dict = {}
+        if os.path.exists(local_path):#判断本地是否有那个文件
+            is_down = False
+
+        if is_down:
+            mkpdir(local_path) #创建对应的文件夹
+            loop = 1
+            result_dict = {}
+            dlFile = local_path
+            existSize = 0
+            myUrlclass = myURLOpener()
+            if os.path.exists(dlFile):
+                outputFile = open(dlFile, "ab")
+                existSize = os.path.getsize(dlFile)
+
+                myUrlclass.addheader("Range", "bytes=%s-" % (existSize))
+            else:
+                outputFile = open(dlFile, "wb")
+
+            status, url = self.download_file_link(remote_path)
+            if not status:
+                result_dict['status'] == "fail"
+                result_dict['message'] == "download_file_link error"
+                print(json.dumps(result_dict))
+
+            webPage = myUrlclass.open(url)
+            responsedCode = webPage.getcode()
+            if responsedCode == 416:
+                loop = 0
+                logging.error("Requested Range not satisfiable")
+
+            contentLength = webPage.headers['Content-Length']
+            logging.info("contentLength:%s - existSize:%d " % (contentLength, existSize))
+            if int(contentLength) == existSize:
+                loop = 0
+                logging.error("File already downloaded")
+
+            numBytes = 0
+            while loop:
+                data = webPage.read(8192)
+                if not data:
+                    break
+                outputFile.write(data)
+                numBytes = numBytes + len(data)
+                # print "data:%s" % data
+                # print "read ", len(data), " bytes"
+                logging.info("read len:{0} bytes:{1}".format(len(data), bytes))
+            webPage.close()
+            outputFile.close()
+            for k, v in webPage.headers.items():
+                logging.info("{0}={1}".format(k, v))
+
+            logging.info("code:{0}".format(webPage.getcode()))
+            logging.info("copied:{0} bytes from {1}".format(numBytes, webPage.url))
+
+        new_md5 = self.file_md5_calc(local_path)
+        logging.info("old_file_md5:{0},down_file_md5:{1}".format(md5,new_md5))
+
+        if md5 == new_md5:
+            result_dict['status'] = "success"
+            print(json.dumps(result_dict))
+        else:
+            result_dict['status'] = "fail"
+            result_dict['message'] = "down file ma5 inconformity"
+            print(json.dumps(result_dict))
+
+    def add_upload_file(self, local_path, remote_path, acl="public-read-write"):
+        """ 上传小文件 """
+        result_dict = {}
+        md5 = self.file_md5_calc(local_path)
+        result_dict['md5'] = md5
+        with open(local_path, 'rb') as f:
+            data = self.s3_client.put_object(Bucket=self.bucket_name, Key=remote_path, Body=f.read(), ACL=acl)
+            logging.info('add_upload_file is %s' % data)
+
+        result_dict['status'] = 'success'
+        print(json.dumps(result_dict))
+
+    def add_upload_big_file(self, local_path, remote_path, filesize):
+        """
+            分片上传大文件
+
+        :param bucket_name:
+        :param local_path:
+        :param remote_path:
+        :return:
+        """
+        result_dict = {}
+        md5 = self.file_md5_calc(local_path)
+        result_dict['md5'] = md5
+        bucket = self.resource.Bucket(self.bucket_name)
+        mpu = bucket.Object(remote_path).initiate_multipart_upload()
+        part_info = {'Parts': []}
+        i = 1
+        f = open(local_path, 'rb')
+        ## 计算块大小
+        shardsize = 50 * 1024 * 1024
+        if filesize < 50 * 1024 * 1024 * 1024:
+            shardsize = 50 * 1024 * 1024
+        elif 50 * 1024 * 1024 * 1024 <= filesize < 200 * 1024 * 1024 * 1024:
+            shardsize = 200 * 1024 * 1024
+        elif 200 * 1024 * 1024 * 1024 <= filesize < 500 * 1024 * 1024 * 1024:
+            shardsize = 500 * 1024 * 1024
+        elif 500 * 1024 * 1024 * 1024 <= filesize < 1000 * 1024 * 1024 * 1024:
+            shardsize = 1000 * 1024 * 1024
+        elif filesize >= 1000 * 1024 * 1024 * 1024:
+            shardsize = 2000 * 1024 * 1024
+
+        while 1:
+            data = f.read(shardsize)
+            if data == b'':
+                break
+            part = mpu.Part(i)
+            resp = part.upload(Body=data)
+            part_info["Parts"].append(dict(
+                PartNumber=i,
+                ETag=resp['ETag']
+            ))
+            i += 1
+        try:
+            mpu.complete(MultipartUpload=part_info)
+        except ClientError as ex:
+            if ex.response['Error']['Code'] == "NoSuchUpload":
+                target = self.s3_client.head_object(Bucket=self.bucket_name, Key=remote_path)
+                if os.path.getsize(local_path) == target.get('ContentLength'):
+                    result_dict['msg'] = str(ex.response) + "has already uploaded"
+                else:
+                    raise ex
+            else:
+                raise ex
+        f.close()
+        result_dict['status'] = 'success'
+        print(json.dumps(result_dict))
+
+
+    def upload_file(self, local_path, remote_path):
+        filesize = os.path.getsize(local_path)
+        if filesize< 4*2**20:
+            self.add_upload_file(local_path, remote_path)
+        else:
+            self.add_upload_big_file(local_path, remote_path, filesize)
+
+
+    def file_md5_calc(self, fineName):
+        filesize = os.path.getsize(fineName)  # 获取文件字节大小
+        m = hashlib.md5()
+        is_clice_up_flag = True  # 是否切片计算 默认为真
+        size_100M = 100 * 2 ** 20
+        size_10M = 10 * 2 ** 20
+        size_1M = 2 ** 20
+
+        if 0 < filesize < size_100M:  # 当文件小与100M就计算整个文件MD5
+            is_clice_up_flag = False
+
+        else:  # 大于整个文件大小 分别在文件的头部 中间 结尾 取出10M的文件内容进行计算
+            start_offset = size_10M
+            middle_offset = (filesize / 2)
+            last_lines_offset = size_10M * (-1)
+
+        if is_clice_up_flag:
+            with open(fineName, 'rb') as f:
+                first_line = f.read(size_10M)
+                f.seek(last_lines_offset, 2)
+                last_line = f.read(size_10M)
+                f.seek(middle_offset, 0)
+                middle_line = f.read(size_10M)
+                m.update(first_line)
+                m.update(middle_line)
+                m.update(last_line)
+                return m.hexdigest()
+        else:
+            with open(fineName, "rb") as f:
+                while True:
+                    buf = f.read(size_1M)
+                    if not buf:
+                        break
+                    m.update(buf)
+
+            logging.info('file_md5_calc id:{0}'.format(m.hexdigest()))
+            return m.hexdigest()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(filename='/var/log/S3File.log', level=logging.INFO,
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                        datefmt='%m/%d/%Y %I:%M:%S %p'
+                        )
+
+    content = {
+        "s3": {
+            "access_key": "{{access_key}}",
+            "secret_key": "{{secret_key}}",
+            "bucket_name": "{{bucket_name}}",
+            "endpoint_url": "{{endpoint_url}}"
+        },
+        "file": {
+            "local_path": "{{backup_file}}",
+            "remote_path": "{{remote_backup_file}}",
+            {% if md5 is defined -%}
+            "md5": "{{md5}}"
+            {% endif %}
+
+        },
+        "action": "{{action}}"
+    }
+
+    s3_dict = content['s3']
+    file = content['file']
+
+    s3 = S3Api(**s3_dict)
+
+    if content['action'] == "upload":
+        s3.upload_file(file['local_path'], file['remote_path'])
+    #     结果打印 {"status": "success", "md5": "fb9ba7480f28590975aefa871fc8ddd7"}
+    elif content['action'] == "down":
+        print file['local_path']
+        s3.big_file_down(file['local_path'], file['remote_path'], file['md5'])
+    #     结果打印 {"status": "success"}

@@ -1,0 +1,80 @@
+---
+- hosts: all
+  gather_facts: no
+  tasks:
+    - block:
+        - name: sed timeoutstartsec time 10sec
+          lineinfile:
+            path: /etc/systemd/system/network-online.target.wants/networking.service
+            backrefs: yes
+            state: present
+            regexp: '^TimeoutStartSec=5min'
+            line: 'TimeoutStartSec=10sec'
+          ignore_errors: true
+
+#        - name: reboot server
+#          reboot:
+#            reboot_timeout: 1200
+#          shell: ( /bin/sleep 5 ; shutdown -r now "Ansible updates triggered" )
+#          async: 30
+#          poll: 0
+#          ignore_errors: true
+
+
+        - name: chack port 22
+          wait_for: port=22 host="{{inventory_hostname}}" delay=10 timeout=600
+          delegate_to: localhost
+      when: (operation_type == "create") or (operation_type == "add_disk")
+
+    - block:
+        - parted:
+            device: /dev/sdb
+            number: 1
+            flags: [ lvm ]
+            state: present
+            part_start: 0%
+        - name: filesystem | create pv,vg,lv
+          lvg: vg="vg01" pvs="/dev/sdb1"
+
+        - name: filesystem |create lv
+          lvol: vg="vg01" lv="data01" size=100%FREE
+
+        - name: filesystem | create fs
+          filesystem: fstype={{fstype}} dev=/dev/vg01/data01
+
+        - name: create /data/
+          file: path=/data/ state=directory
+
+        - name: mount /data/
+          mount: name=/data src=/dev/vg01/data01 dump=0 passno=0 fstype={{fstype}} state=mounted
+      when: operation_type == "create"
+
+    - block:
+        - name: chack port 22
+          wait_for: port=22 host="{{inventory_hostname}}" delay=5 timeout=600
+          delegate_to: localhost
+
+        - name: check disk devices
+          script: "../templates/check_disk.py"
+          register: output_disk
+        - debug: var={{output_disk}}
+
+        - parted:
+            device: "/dev/{{item}}"
+            number: 1
+            flags: [ lvm ]
+            state: present
+            part_start: 0%
+          with_items: "{{output_disk.stdout}}"
+
+        - name: filesystem | create pv,vg,lv
+          shell: pvcreate /dev/{{item}}1 -y && vgextend vg01 /dev/{{item}}1
+          with_items: "{{output_disk.stdout}}"
+
+        - name: extend all remaining space of group
+          lvol: vg="vg01" lv="data01" size=+100%FREE
+
+        - name: extend file services
+          command: resize2fs /dev/vg01/data01
+
+      when: (operation_type == "restarted") or (operation_type == "add_disk")

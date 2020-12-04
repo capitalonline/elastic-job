@@ -1,0 +1,30 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  vars:
+    backup_file: "{{backup_path}}/{{tar_filename}}-{{start_time}}-{{end_time}}.tar.gz"
+    oplog_path: "{{backup_path}}/"
+  tasks:
+    - block:
+
+        - name: mkdir oplog dir
+          file: name={{item}} state=directory
+          with_items:
+            - "{{oplog_path}}"
+
+        - name: dump oplog.rs
+          shell: mongodump -u{{super_user_info.username}} -p{{super_user_info.passwd}} --authenticationDatabase admin -d local -c oplog.rs  --query '{ts:{$gte:Timestamp('{{start_time}}',1),$lte:Timestamp('{{end_time}}',9999)}}' -o {{oplog_path}}
+
+        - name: compress backup data file
+          archive: path={{oplog_path}}/* dest={{backup_file}} format=gz remove=yes
+          async: 36000
+          poll: 60
+
+        - name: query file name
+          script: "../templates/check_file.py {{backup_path}}"
+          register: return_query
+        - debug:
+            msg: "path={{return_query.stdout_lines[0]}},size={{return_query.stdout_lines[1]}},backup_host_ip={{backup_host_ip}},replica_set_name={{replica_set_name}},start_time={{start_time}},end_time={{end_time}}"
+
+

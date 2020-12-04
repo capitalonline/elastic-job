@@ -1,0 +1,12 @@
+---
+- hosts: all
+  gather_facts: no
+  remote_user: root
+  tasks:
+    - block:
+        - name: copy file to /etc/iptables/ipv4
+          template: src={{iptables_conf}} dest=/etc/iptables/rules.v4
+
+        - name: restart netfilter-persistence
+          service: name=netfilter-persistent  state=restarted
+

@@ -1,0 +1,32 @@
+---
+- hosts: all
+  remote_user: root
+  gather_facts: False
+  vars:
+    physics_backup_file_path: "/opt/physics_backup.js"
+    compress_path: "/data/mongod"
+    backup_file: "{{backup_path}}/{{tar_filename}}.tar.gz"
+  tasks:
+    - block:
+        - name: copy backup  script file
+          template: src=../templates/physics_backup.j2 dest={{physics_backup_file_path}}
+
+        - name: create backup path
+          file: path={{backup_path}} state=directory owner=mongod group=mongod
+
+        - name: backup process
+          shell: /usr/bin/mongo -u{{super_user_info.username}} -p{{super_user_info.passwd}} --authenticationDatabase=admin < {{physics_backup_file_path}}
+          register: backup_result
+
+        - name: compress backup data file
+          archive: path={{backup_path}}/* dest={{backup_file}} format=gz remove=yes
+
+        - name: query file name
+          script: "../templates/check_file.py {{backup_path}}"
+          register: return_query
+        - debug:
+            msg: "path={{return_query.stdout_lines[0]}},size={{return_query.stdout_lines[1]}},backup_host_ip={{backup_host_ip}},replica_set_name={{replica_set_name}}"
+
+
+
+

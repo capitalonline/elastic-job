@@ -1,0 +1,11 @@
+[Unit]
+  Description=mongoexprter
+  After=network.target
+
+  [Service]
+  Type=simple
+  Restart=always
+  WorkingDirectory=/opt/exporter/
+  ExecStart=/opt/exporter/mongodb_exporter --mongodb.uri=mongodb://{{super_user_info.username}}:{{super_user_info.passwd}}@localhost:{{port}}/admin
+  [Install]
+  WantedBy=multi-user.target
